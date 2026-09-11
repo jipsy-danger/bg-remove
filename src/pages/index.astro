@@ -77,7 +77,7 @@ import '../styles/global.css';
                   <img id="resultImage" alt="Background removed result" />
                   <div class="crosshair x"></div><div class="crosshair y"></div>
                 </div>
-                <div class="preview-footer"><span>MATTE GENERATED LOCALLY</span><span id="dimensions">—</span></div>
+                <div class="preview-footer"><span id="resultStatus">MATTE GENERATED LOCALLY · EDGE CLEANUP APPLIED</span><span id="dimensions">—</span></div>
               </div>
             </section>
           </div>
@@ -112,6 +112,7 @@ import '../styles/global.css';
       const dimensions = document.querySelector('#dimensions');
       const dropTitle = document.querySelector('#dropTitle');
       const dropHint = document.querySelector('#dropHint');
+      const resultStatus = document.querySelector('#resultStatus');
       let resultUrl = '';
       let currentFile = null;
 
@@ -126,6 +127,104 @@ import '../styles/global.css';
         const percent = Math.max(0, Math.min(100, value));
         progressBar.style.width = `${percent}%`;
         progressText.textContent = text;
+      };
+
+      const loadImage = (blob) => new Promise((resolve, reject) => {
+        const url = URL.createObjectURL(blob);
+        const image = new Image();
+        image.onload = () => { URL.revokeObjectURL(url); resolve(image); };
+        image.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Could not decode image')); };
+        image.src = url;
+      });
+
+      // The neural mask can leave a light/white halo on logos and product shots.
+      // Remove only light pixels connected to the outside edge, so white details
+      // enclosed inside the subject are preserved.
+      const cleanEdgeMatte = async (originalFile, aiBlob) => {
+        const [original, masked] = await Promise.all([
+          loadImage(originalFile),
+          loadImage(aiBlob)
+        ]);
+
+        const width = masked.naturalWidth || original.naturalWidth;
+        const height = masked.naturalHeight || original.naturalHeight;
+        const originalCanvas = document.createElement('canvas');
+        const resultCanvas = document.createElement('canvas');
+        originalCanvas.width = resultCanvas.width = width;
+        originalCanvas.height = resultCanvas.height = height;
+
+        const originalCtx = originalCanvas.getContext('2d', { willReadFrequently: true });
+        const resultCtx = resultCanvas.getContext('2d', { willReadFrequently: true });
+        originalCtx.drawImage(original, 0, 0, width, height);
+        resultCtx.drawImage(masked, 0, 0, width, height);
+
+        const source = originalCtx.getImageData(0, 0, width, height);
+        const output = resultCtx.getImageData(0, 0, width, height);
+        const src = source.data;
+        const dst = output.data;
+        const size = width * height;
+        const outside = new Uint8Array(size);
+        const queue = new Int32Array(size);
+        let head = 0;
+        let tail = 0;
+
+        const isLightBackground = (index) => {
+          const p = index * 4;
+          const r = src[p];
+          const g = src[p + 1];
+          const b = src[p + 2];
+          const max = Math.max(r, g, b);
+          const min = Math.min(r, g, b);
+          // Handles white, ivory and pale gray photo backgrounds without
+          // treating saturated subject colors as background.
+          return min >= 205 && max - min <= 24;
+        };
+
+        const pushIfBackground = (index) => {
+          if (index < 0 || index >= size || outside[index] || !isLightBackground(index)) return;
+          outside[index] = 1;
+          queue[tail++] = index;
+        };
+
+        for (let x = 0; x < width; x += 1) {
+          pushIfBackground(x);
+          if (height > 1) pushIfBackground((height - 1) * width + x);
+        }
+        for (let y = 1; y < height - 1; y += 1) {
+          pushIfBackground(y * width);
+          if (width > 1) pushIfBackground(y * width + width - 1);
+        }
+
+        while (head < tail) {
+          const index = queue[head++];
+          const x = index % width;
+          if (x > 0) pushIfBackground(index - 1);
+          if (x < width - 1) pushIfBackground(index + 1);
+          if (index >= width) pushIfBackground(index - width);
+          if (index + width < size) pushIfBackground(index + width);
+        }
+
+        let removed = 0;
+        for (let i = 0; i < size; i += 1) {
+          if (!outside[i]) continue;
+          const p = i * 4;
+          const originalAlpha = dst[p + 3];
+          if (!originalAlpha) continue;
+
+          // Fully remove the connected background. A short feather on pixels
+          // near the threshold keeps the matte visually cleaner on light edges.
+          const brightness = (src[p] + src[p + 1] + src[p + 2]) / 3;
+          const feather = Math.max(0, Math.min(1, (brightness - 195) / 35));
+          dst[p + 3] = Math.round(originalAlpha * (1 - feather));
+          if (dst[p + 3] < 12) dst[p + 3] = 0;
+          removed += 1;
+        }
+
+        resultCtx.putImageData(output, 0, 0);
+        const cleaned = await new Promise((resolve, reject) => {
+          resultCanvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error('Could not encode PNG')), 'image/png');
+        });
+        return { blob: cleaned, removed };
       };
 
       const resetUI = () => {
@@ -152,7 +251,7 @@ import '../styles/global.css';
         setProgress(5, 'LOADING IMAGE…');
 
         try {
-          const blob = await removeBackground(file, {
+          const aiBlob = await removeBackground(file, {
             model: 'isnet',
             output: { format: 'image/png' },
             progress: (key, current, total) => {
@@ -160,12 +259,18 @@ import '../styles/global.css';
               setProgress(Math.max(8, value), key.replaceAll(':', ' · ').toUpperCase());
             }
           });
-          setProgress(96, 'FINALIZING ALPHA…');
+
+          setProgress(91, 'REFINING EDGE MATTE…');
+          const { blob, removed } = await cleanEdgeMatte(file, aiBlob);
+          setProgress(97, 'FINALIZING ALPHA…');
           resultUrl = URL.createObjectURL(blob);
           resultImage.src = resultUrl;
           const probe = new Image();
           probe.onload = () => { dimensions.textContent = `${probe.naturalWidth} × ${probe.naturalHeight} PX`; };
           probe.src = resultUrl;
+          resultStatus.textContent = removed > 0
+            ? `MATTE GENERATED LOCALLY · ${removed.toLocaleString()} EDGE PIXELS CLEANED`
+            : 'MATTE GENERATED LOCALLY · EDGE CLEANUP APPLIED';
           processing.hidden = true;
           preview.hidden = false;
           setProgress(100, 'COMPLETE');
