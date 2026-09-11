@@ -1,0 +1,16 @@
+{
+  "name": "bg-remove",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview"
+  },
+  "dependencies": {
+    "@imgly/background-removal": "^1.7.0",
+    "astro": "^5.13.5",
+    "onnxruntime-web": "1.21.0"
+  }
+}

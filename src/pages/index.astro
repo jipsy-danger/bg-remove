@@ -1,0 +1,198 @@
+---
+import '../styles/global.css';
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#080a0e" />
+    <meta name="description" content="BG Remove — precise browser-side AI background removal." />
+    <link rel="icon" href={`${import.meta.env.BASE_URL}favicon.svg`} />
+    <title>BG Remove — AI Image Isolation</title>
+  </head>
+  <body>
+    <div class="hud-shell">
+      <div class="ambient ambient-a"></div>
+      <div class="ambient ambient-b"></div>
+      <div class="scanlines"></div>
+
+      <header class="topbar">
+        <a class="brand" href=".">
+          <span class="brand-mark"><i></i><i></i><i></i></span>
+          <span><strong>BG</strong> REMOVE</span>
+        </a>
+        <div class="system-state"><span class="pulse"></span> LOCAL AI <b>●</b> READY</div>
+        <div class="top-meta"><span>V.01</span><span class="divider"></span><span>IMAGE MATTE ENGINE</span></div>
+      </header>
+
+      <main>
+        <section class="hero">
+          <div class="eyebrow"><span>01</span><span class="line"></span><span>ISOLATION CONSOLE</span></div>
+          <h1>Remove the <em>background.</em><br />Keep the subject.</h1>
+          <p class="hero-copy">Precision image isolation powered by local browser AI. Drop an image into the console and generate a clean transparent PNG without sending the photo to a server.</p>
+
+          <div class="workspace">
+            <aside class="rail glass">
+              <div class="rail-title">CONTROL</div>
+              <div class="rail-item active"><span>01</span><b>REMOVE BG</b></div>
+              <div class="rail-item"><span>02</span><b>EDGE MATTE</b></div>
+              <div class="rail-item"><span>03</span><b>EXPORT</b></div>
+              <div class="rail-spacer"></div>
+              <div class="metric"><small>ENGINE</small><strong>ISNET</strong></div>
+              <div class="metric"><small>MODE</small><strong>LOCAL</strong></div>
+            </aside>
+
+            <section class="console glass" id="dropzone">
+              <div class="console-corner c1"></div><div class="console-corner c2"></div><div class="console-corner c3"></div><div class="console-corner c4"></div>
+              <div class="console-head">
+                <div><span class="status-dot"></span> INPUT CHANNEL</div>
+                <span id="fileMeta">WAITING FOR IMAGE</span>
+              </div>
+
+              <div class="drop-area" id="dropArea">
+                <div class="orbital">
+                  <div class="orbital-ring ring-1"></div><div class="orbital-ring ring-2"></div>
+                  <div class="upload-core"><span class="plus">+</span></div>
+                </div>
+                <h2 id="dropTitle">DROP IMAGE HERE</h2>
+                <p id="dropHint">or click to browse · PNG / JPG / WEBP</p>
+                <button class="primary" id="browseBtn" type="button"><span>SELECT IMAGE</span><b>↗</b></button>
+                <input id="fileInput" type="file" accept="image/png,image/jpeg,image/webp" hidden />
+              </div>
+
+              <div class="processing" id="processing" hidden>
+                <div class="processor-orbit"><div></div></div>
+                <div class="processing-copy"><span>NEURAL MATTE PASS</span><strong id="progressText">INITIALIZING…</strong></div>
+                <div class="progress-track"><div id="progressBar"></div></div>
+              </div>
+
+              <div class="preview" id="preview" hidden>
+                <div class="preview-toolbar">
+                  <div><span class="status-dot good"></span> TRANSPARENT OUTPUT</div>
+                  <div class="preview-actions"><button id="resetBtn" type="button">RESET</button><button class="primary compact" id="downloadBtn" type="button">DOWNLOAD PNG ↘</button></div>
+                </div>
+                <div class="preview-stage" id="previewStage">
+                  <img id="resultImage" alt="Background removed result" />
+                  <div class="crosshair x"></div><div class="crosshair y"></div>
+                </div>
+                <div class="preview-footer"><span>MATTE GENERATED LOCALLY</span><span id="dimensions">—</span></div>
+              </div>
+            </section>
+          </div>
+        </section>
+
+        <section class="feature-strip">
+          <div><span class="feature-icon">◎</span><strong>PRIVATE BY DESIGN</strong><small>Your image stays in the browser.</small></div>
+          <div><span class="feature-icon">◈</span><strong>AI MATTE</strong><small>Subject-aware edge isolation.</small></div>
+          <div><span class="feature-icon">▧</span><strong>PNG ALPHA</strong><small>Clean transparency, ready to use.</small></div>
+          <div><span class="feature-icon">⌁</span><strong>FAST REPEAT</strong><small>Model assets are browser-cached.</small></div>
+        </section>
+      </main>
+
+      <footer><span>BG REMOVE / IMAGE ISOLATION SYSTEM</span><span>NO UPLOADS · NO ACCOUNT · NO SERVER PROCESSING</span></footer>
+    </div>
+
+    <script>
+      import removeBackground from '@imgly/background-removal';
+
+      const input = document.querySelector('#fileInput');
+      const browse = document.querySelector('#browseBtn');
+      const dropArea = document.querySelector('#dropArea');
+      const dropzone = document.querySelector('#dropzone');
+      const processing = document.querySelector('#processing');
+      const preview = document.querySelector('#preview');
+      const resultImage = document.querySelector('#resultImage');
+      const download = document.querySelector('#downloadBtn');
+      const reset = document.querySelector('#resetBtn');
+      const fileMeta = document.querySelector('#fileMeta');
+      const progressBar = document.querySelector('#progressBar');
+      const progressText = document.querySelector('#progressText');
+      const dimensions = document.querySelector('#dimensions');
+      const dropTitle = document.querySelector('#dropTitle');
+      const dropHint = document.querySelector('#dropHint');
+      let resultUrl = '';
+      let currentFile = null;
+
+      const formatBytes = (bytes) => {
+        if (!bytes) return '0 B';
+        const units = ['B', 'KB', 'MB', 'GB'];
+        const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+        return `${(bytes / Math.pow(1024, index)).toFixed(index ? 1 : 0)} ${units[index]}`;
+      };
+
+      const setProgress = (value, text) => {
+        const percent = Math.max(0, Math.min(100, value));
+        progressBar.style.width = `${percent}%`;
+        progressText.textContent = text;
+      };
+
+      const resetUI = () => {
+        if (resultUrl) URL.revokeObjectURL(resultUrl);
+        resultUrl = '';
+        currentFile = null;
+        input.value = '';
+        processing.hidden = true;
+        preview.hidden = true;
+        dropArea.hidden = false;
+        fileMeta.textContent = 'WAITING FOR IMAGE';
+        dropTitle.textContent = 'DROP IMAGE HERE';
+        dropHint.textContent = 'or click to browse · PNG / JPG / WEBP';
+        progressBar.style.width = '0%';
+      };
+
+      const processFile = async (file) => {
+        if (!file || !file.type.startsWith('image/')) return;
+        currentFile = file;
+        dropArea.hidden = true;
+        preview.hidden = true;
+        processing.hidden = false;
+        fileMeta.textContent = `${file.name.toUpperCase()} · ${formatBytes(file.size)}`;
+        setProgress(5, 'LOADING IMAGE…');
+
+        try {
+          const blob = await removeBackground(file, {
+            model: 'isnet',
+            output: { format: 'image/png' },
+            progress: (key, current, total) => {
+              const value = total ? Math.round((current / total) * 100) : 0;
+              setProgress(Math.max(8, value), key.replaceAll(':', ' · ').toUpperCase());
+            }
+          });
+          setProgress(96, 'FINALIZING ALPHA…');
+          resultUrl = URL.createObjectURL(blob);
+          resultImage.src = resultUrl;
+          const probe = new Image();
+          probe.onload = () => { dimensions.textContent = `${probe.naturalWidth} × ${probe.naturalHeight} PX`; };
+          probe.src = resultUrl;
+          processing.hidden = true;
+          preview.hidden = false;
+          setProgress(100, 'COMPLETE');
+        } catch (error) {
+          console.error(error);
+          processing.hidden = true;
+          dropArea.hidden = false;
+          dropTitle.textContent = 'PROCESSING FAILED';
+          dropHint.textContent = 'Try another image or refresh the page.';
+          fileMeta.textContent = 'ENGINE ERROR';
+        }
+      };
+
+      browse.addEventListener('click', () => input.click());
+      dropArea.addEventListener('click', (event) => { if (event.target.closest('button')) return; input.click(); });
+      input.addEventListener('change', () => processFile(input.files?.[0]));
+      ['dragenter', 'dragover'].forEach((eventName) => dropzone.addEventListener(eventName, (event) => { event.preventDefault(); dropzone.classList.add('dragging'); }));
+      ['dragleave', 'drop'].forEach((eventName) => dropzone.addEventListener(eventName, (event) => { event.preventDefault(); dropzone.classList.remove('dragging'); }));
+      dropzone.addEventListener('drop', (event) => processFile(event.dataTransfer.files?.[0]));
+      reset.addEventListener('click', resetUI);
+      download.addEventListener('click', () => {
+        if (!resultUrl) return;
+        const link = document.createElement('a');
+        link.href = resultUrl;
+        link.download = `${currentFile?.name.replace(/\.[^.]+$/, '') || 'bg-remove'}-transparent.png`;
+        link.click();
+      });
+    </script>
+  </body>
+</html>
